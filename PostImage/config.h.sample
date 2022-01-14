@@ -20,8 +20,8 @@
 /*-------------------------------------------------------------------------*
  * Configration
  *-------------------------------------------------------------------------*/
-#define  AP_SSID        "TP-Link_82A4"
-#define  PASSPHRASE     "97551249"
+#define  AP_SSID        "AccessPoint"
+#define  PASSPHRASE     "1234567890"
 
 //#define  HTTP_SRVR_IP  "192.168.0.108"
 //#define  HTTP_PORT     "10080"
