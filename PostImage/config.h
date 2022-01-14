@@ -23,8 +23,9 @@
 #define  AP_SSID        "TP-Link_82A4"
 #define  PASSPHRASE     "97551249"
 
-#define  HTTP_SRVR_IP  "192.168.0.108"
-#define  HTTP_PORT     "10080"
-
+//#define  HTTP_SRVR_IP  "192.168.0.108"
+//#define  HTTP_PORT     "10080"
+#define  HTTP_SRVR_IP  "192.168.0.125"
+#define  HTTP_PORT     "5000"
 
 #endif /*_CONFIG_H_*/

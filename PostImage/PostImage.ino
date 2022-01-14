@@ -15,7 +15,7 @@ extern uint32_t ESCBufferCnt;
 
 char server_cid = 0;
 char httpsrvr_ip[16];
-char sendData[SEND_SIZE+1];
+//char sendData[SEND_SIZE+1];
 
 TelitWiFi gs2200;
 TWIFI_Params gsparams;
@@ -63,13 +63,13 @@ void setupNetwork() {
 
 
 // the loop function runs over and over again forever
-void loopNetwork() {
+void loopNetwork(char* sendData, uint32_t size) {
 
   ATCMD_RESP_E resp;
   int count;
   bool httpresponse=false;
   uint32_t start;
-  uint32_t size;
+//  uint32_t size;
   char size_string[10];
   
   ConsoleLog( "Start HTTP Client");
@@ -83,9 +83,9 @@ void loopNetwork() {
   WiFi_InitESCBuffer();
   count = 0;
 
-  size = SEND_SIZE;
-  memset( sendData, '0', SEND_SIZE );
-  sendData[SEND_SIZE] = 0;
+//  size = SEND_SIZE;
+//  memset( sendData, '0', SEND_SIZE );
+//  sendData[SEND_SIZE] = 0;
   ConsoleLog( "POST Start" );
 
   do {
@@ -142,7 +142,7 @@ void loopNetwork() {
   } while( (ATCMD_RESP_OK != resp) && (ATCMD_RESP_INVALID_CID != resp) );
   ConsoleLog( "Socket Closed" );
 
-  delay( 10000 );
+  //delay( 10000 );
 }
 
 void printError(enum CamErr err)
@@ -203,7 +203,7 @@ void CamCB(CamImage img)
 
       /* You can use image data directly by using getImgSize() and getImgBuff().
        * for displaying image to a display, etc. */
-
+/*
       Serial.print("Image data size = ");
       Serial.print(img.getImgSize(), DEC);
       Serial.print(" , ");
@@ -211,6 +211,7 @@ void CamCB(CamImage img)
       Serial.print("buff addr = ");
       Serial.print((unsigned long)img.getImgBuff(), HEX);
       Serial.println("");
+      */
     }
   else
     {
@@ -280,36 +281,40 @@ void setupCamera()
     }
 }
 
+void printDebug(char* title, char* sendData, uint32_t size) {
+  Serial.print(title);
+  Serial.print(" Image data size = ");
+  Serial.print(size, DEC);
+  Serial.print(" , ");
+
+  Serial.print("buff addr = ");
+  Serial.print((unsigned long)sendData, HEX);
+  Serial.println("");
+}
+
 /**
  * @brief Take picture with format JPEG per second
  */
 
 void loopCamera()
 {
-  sleep(5); /* wait for one second to take still picture. */
-  if (1) {  
-    Serial.println("call takePicture()");
-    CamImage img = theCamera.takePicture();
+  Serial.println("  === loopCamera start ===");
+  //sleep(5); /* wait for one second to take still picture. */
+  Serial.println("  === call takePicture start ===");
+  CamImage img = theCamera.takePicture();
+  Serial.println("  === call takePicture end ===");
 
-    if (img.isAvailable()) {
-      char filename[16] = {0};
-      sprintf(filename, "PICT%03d.JPG", 1);
-
-      Serial.print("Save taken picture as ");
-      Serial.print(filename);
-      Serial.println("");
-
-      Serial.print("*Image data size = ");
-      Serial.print(img.getImgSize(), DEC);
-      Serial.print(" , ");
-
-      Serial.print("buff addr = ");
-      Serial.print((unsigned long)img.getImgBuff(), HEX);
-      Serial.println("");
-      loopNetwork();
-    } else {
-      Serial.println("=== img.isAvailable() FALSE");      
-    }
+  if (img.isAvailable()) {
+    char* sendData1 = img.getImgBuff();
+    uint32_t size1 = img.getImgSize();
+    printDebug("  === (1)", sendData1, size1);
+    loopNetwork(img.getImgBuff(), img.getImgSize());
+    char* sendData2 = img.getImgBuff();
+    uint32_t size2 = img.getImgSize();
+    printDebug("  === (2)", sendData1, size1);
+    printDebug("  === (3)", sendData2, size2);
+  } else {
+    Serial.println("  === img.isAvailable() FALSE");      
   }
 }
 
@@ -319,6 +324,10 @@ void setup() {
 }
 
 void loop() {
+  sleep(5);
+  Serial.println("=== loop start ====");
   //loopNetwork();
   loopCamera();
+  Serial.println("=== loop end ====");
+  sleep(55);
 }
