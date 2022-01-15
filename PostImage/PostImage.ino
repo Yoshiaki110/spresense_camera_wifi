@@ -2,8 +2,12 @@
 #include <GS2200AtCmd.h>
 #include <TelitWiFi.h>
 #include "config.h"
-#include <stdio.h>  /* for sprintf */
+//#include <stdio.h>
 #include <Camera.h>
+#include <GNSS.h>
+#define POSITION_BUFFER_SIZE  128       /**< %Buffer size */
+static SpGnss Gnss;                   /**< SpGnss object */
+
 
 extern uint8_t  *RespBuffer[];
 extern int   RespBuffer_Index;
@@ -55,47 +59,36 @@ void printError(enum CamErr err) {
   }
 }
 
-/**
- * Callback from Camera library when video frame is captured.
- */
-
 void CamCB(CamImage img) {
-  /* Check the img instance is available or not. */
   if (img.isAvailable()) {
-    /* If you want RGB565 data, convert image data format to RGB565 */
     img.convertPixFormat(CAM_IMAGE_PIX_FMT_RGB565);
-    /* You can use image data directly by using getImgSize() and getImgBuff().
-     * for displaying image to a display, etc. */
   } else {
     Serial.print("Failed to get video stream image\n");
   }
 }
 
-
 void setup() {
-  /* initialize digital pin LED_BUILTIN as an output. */
-  pinMode(LED0, OUTPUT);
-  pinMode(LED1, OUTPUT);
-  pinMode(LED2, OUTPUT);
-  pinMode(LED3, OUTPUT);
+  pinMode(LED0, OUTPUT);    // ネットワーク
+  pinMode(LED1, OUTPUT);    // 初期化終了
+  pinMode(LED2, OUTPUT);    // GPS FIX
+  pinMode(LED3, OUTPUT);    // 点滅、送信中点灯
   digitalWrite(LED0, LOW);   // turn the LED off (LOW is the voltage level)
   digitalWrite(LED1, LOW);   // turn the LED off (LOW is the voltage level)
   digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
   digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
-  Serial.begin(BAUDRATE);   // talk to PC
+  Serial.begin(BAUDRATE);    // talk to PC
   while (!Serial) {
-    ; /* wait for serial port to connect. Needed for native USB port only */
+    ;
   }
 
+  // ネットワーク関連の初期化
   Init_GS2200_SPI();
-
   gsparams.mode = ATCMD_MODE_STATION;
   gsparams.psave = ATCMD_PSAVE_DEFAULT;
   if ( gs2200.begin( gsparams ) ){
     ConsoleLog( "GS2200 Initilization Fails" );
     while(1);
   }
-
   // AP接続
   if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
     ConsoleLog( "Association Fails" );
@@ -103,39 +96,57 @@ void setup() {
   }
   digitalWrite(LED0, HIGH); // turn on LED
 
-  // カメラ初期化
+  // カメラの初期化
   CamErr err;
   Serial.println("Prepare camera");
   err = theCamera.begin();
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
   }
-
-  Serial.println("Start streaming");
-  err = theCamera.startStreaming(true, CamCB);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-
+//  Serial.println("Start streaming");
+//  err = theCamera.startStreaming(true, CamCB);
+//  if (err != CAM_ERR_SUCCESS) {
+//    printError(err);
+//  }
   Serial.println("Set Auto white balance parameter");
   err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
   }
- 
   Serial.println("Set still picture format");
   err = theCamera.setStillPictureImageFormat(
-   CAM_IMGSIZE_QUADVGA_H,
-   CAM_IMGSIZE_QUADVGA_V,
+   CAM_IMGSIZE_QVGA_H,
+   CAM_IMGSIZE_QVGA_V,
    CAM_IMAGE_PIX_FMT_JPG);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
   }
+
+  // GPSの初期化
+  Gnss.setDebugMode(PrintInfo);
+  int result;
+  result = Gnss.begin();
+  if (result != 0) {
+    Serial.println("Gnss begin error!!");
+  } else {
+    Gnss.select(GPS);
+    Gnss.select(QZ_L1CA);
+    Gnss.select(QZ_L1S);
+    result = Gnss.start(COLD_START);
+    if (result != 0) {
+      Serial.println("Gnss start error!!");
+    } else {
+      Serial.println("Gnss setup OK");
+    }
+  }
+  
   digitalWrite(LED1, HIGH); // turn on LED
 }
 
 void parse_httpresponse(char *message) {
   char *p;
+  Serial.print("parse_httpresponse : ");
+  Serial.println(message);
   if ((p=strstr( message, "200 OK\r\n" )) != NULL) {
     ConsolePrintf( "Response : %s\r\n", p+8 );
   }
@@ -151,12 +162,12 @@ void post(char* sendData, uint32_t size) {
   digitalWrite(LED3, HIGH); // turn on LED
   ConsoleLog( "Start HTTP Client");
 
-  /* Set HTTP Headers */
+  // HTTPヘッダー
   AtCmd_HTTPCONF( HTTP_HEADER_AUTHORIZATION, "Basic dGVzdDp0ZXN0MTIz" );
   AtCmd_HTTPCONF( HTTP_HEADER_CONTENT_TYPE, "application/x-www-form-urlencoded" );
   AtCmd_HTTPCONF( HTTP_HEADER_HOST, HTTP_SRVR_IP );
 
-  /* Prepare for the next chunck of incoming data */
+  //
   WiFi_InitESCBuffer();
   count = 0;
   ConsoleLog( "POST Start" );
@@ -166,19 +177,18 @@ void post(char* sendData, uint32_t size) {
   } while (ATCMD_RESP_OK != resp);
   
   ConsoleLog( "Socket Opened" );
-    
 
-  /* Content-Length should be set BEFORE sending the data */
+  // コンテントレングス
   sprintf( size_string, "%d", size );
   do {
     resp = AtCmd_HTTPCONF( HTTP_HEADER_CONTENT_LENGTH, size_string );
   } while (ATCMD_RESP_OK != resp);
-  
+  // 送信
   do {
     resp = AtCmd_HTTPSEND( server_cid, HTTP_METHOD_POST, 10, "/postData", sendData, size );
   } while (ATCMD_RESP_OK != resp);
   
-  /* Need to receive the HTTP response */
+  // レスポンス
   while( 1 ){
     if( Get_GPIO37Status() ){
       resp = AtCmd_RecvResponse();
@@ -205,9 +215,7 @@ void post(char* sendData, uint32_t size) {
     if( msDelta(start)>20000 ) // Timeout
       break;
   }
-  
   delay( 1000 );
-
   do {
     resp = AtCmd_HTTPCLOSE( server_cid );
   } while( (ATCMD_RESP_OK != resp) && (ATCMD_RESP_INVALID_CID != resp) );
@@ -216,42 +224,6 @@ void post(char* sendData, uint32_t size) {
   digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
 }
 
-/*
-void setupCamera() {
-  CamErr err;
-  Serial.begin(BAUDRATE);
-  while (!Serial) {
-    ; 
-  }
-
-  Serial.println("Prepare camera");
-  err = theCamera.begin();
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-
-  Serial.println("Start streaming");
-  err = theCamera.startStreaming(true, CamCB);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-
-  Serial.println("Set Auto white balance parameter");
-  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
- 
-  Serial.println("Set still picture format");
-  err = theCamera.setStillPictureImageFormat(
-   CAM_IMGSIZE_QUADVGA_H,
-   CAM_IMGSIZE_QUADVGA_V,
-   CAM_IMAGE_PIX_FMT_JPG);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-}
-*/
 void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.print(title);
   Serial.print(" Image data size = ");
@@ -263,37 +235,46 @@ void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.println("");
 }
 
-void loop() {
-  sleep(5);
-  digitalWrite(LED2, HIGH); // turn on LED
-  Serial.println("=== loop start ====");
-  Serial.println("  === call takePicture start ===");
-  CamImage img = theCamera.takePicture();
-  Serial.println("  === call takePicture end ===");
+void wait(SpNavData *pNavData, int sec) {
+  for (int i = 0; i < sec; i++) {
+    digitalWrite(LED3, HIGH); // turn on LED
+    delay(100);
+    digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
+    if (Gnss.waitUpdate(1000)) {
+      Gnss.getNavData(pNavData);
+      if (pNavData->posFixMode != FixInvalid && pNavData->posDataExist != 0) {
+        digitalWrite(LED2, HIGH); // turn on LED
+      } else {
+        digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
+      }
+    }
+  }
+}
 
+void loop() {
+  SpNavData NavData;
+  float lat = 0.0;
+  float lng = 0.0;
+  // 位置情報取得
+  wait(&NavData, 5);
+  if (NavData.posFixMode != FixInvalid && NavData.posDataExist != 0) {
+    lat = NavData.latitude;
+    lng = NavData.longitude;
+  }
+  // 撮影
+  CamImage img = theCamera.takePicture();
   if (img.isAvailable()) {
-    char* sendData = img.getImgBuff();
-    uint32_t size = img.getImgSize();
-    printDebug("  === ", sendData, size);
-    post(sendData, size);
+    char* imgBuff = img.getImgBuff();
+    uint32_t imgSize = img.getImgSize();
+    uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
+    char* sendBuff = (char*)malloc(sendSize);
+    snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
+    memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
+    printDebug("  === ", sendBuff, sendSize);
+    post(sendBuff, sendSize);
+    free(sendBuff);
   } else {
     Serial.println("  === img.isAvailable() FALSE");      
   }
-  
-  Serial.println("=== loop end sleep====");
-  digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
-  sleep(55);
+  wait(&NavData, 55);
 }
-/*
-void setup() {
-  setupNetwork();
-  setupCamera();
-}
-
-void loop() {
-  sleep(5);
-  Serial.println("=== loop start ====");
-  loopCamera();
-  Serial.println("=== loop end ====");
-  sleep(55);
-}*/
