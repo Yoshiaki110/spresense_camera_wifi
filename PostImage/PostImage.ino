@@ -5,21 +5,27 @@
 //#include <stdio.h>
 #include <Camera.h>
 #include <GNSS.h>
+#include <Wire.h>
+#include "KX224.h"
+
 #define POSITION_BUFFER_SIZE  128       /**< %Buffer size */
+#define BAUDRATE                (115200)
+#define THRESHOLD   0.15
+
 static SpGnss Gnss;                   /**< SpGnss object */
-
-
 extern uint8_t  *RespBuffer[];
 extern int   RespBuffer_Index;
 extern uint8_t ESCBuffer[];
 extern uint32_t ESCBufferCnt;
-
 char server_cid = 0;
 char httpsrvr_ip[16];
-
 TelitWiFi gs2200;
 TWIFI_Params gsparams;
-#define BAUDRATE                (115200)
+KX224 kx224(KX224_DEVICE_ADDRESS_1E);
+float g_X = 0.0;
+float g_Y = 0.0;
+float g_Z = 0.0;
+
 
 void printError(enum CamErr err) {
   Serial.print("Error: ");
@@ -65,82 +71,6 @@ void CamCB(CamImage img) {
   } else {
     Serial.print("Failed to get video stream image\n");
   }
-}
-
-void setup() {
-  pinMode(LED0, OUTPUT);    // ネットワーク
-  pinMode(LED1, OUTPUT);    // 初期化終了
-  pinMode(LED2, OUTPUT);    // GPS FIX
-  pinMode(LED3, OUTPUT);    // 点滅、送信中点灯
-  digitalWrite(LED0, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED1, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
-  Serial.begin(BAUDRATE);    // talk to PC
-  while (!Serial) {
-    ;
-  }
-
-  // ネットワーク関連の初期化
-  Init_GS2200_SPI();
-  gsparams.mode = ATCMD_MODE_STATION;
-  gsparams.psave = ATCMD_PSAVE_DEFAULT;
-  if ( gs2200.begin( gsparams ) ){
-    ConsoleLog( "GS2200 Initilization Fails" );
-    while(1);
-  }
-  // AP接続
-  if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
-    ConsoleLog( "Association Fails" );
-    while(1);
-  }
-  digitalWrite(LED0, HIGH); // turn on LED
-
-  // カメラの初期化
-  CamErr err;
-  Serial.println("Prepare camera");
-  err = theCamera.begin();
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-//  Serial.println("Start streaming");
-//  err = theCamera.startStreaming(true, CamCB);
-//  if (err != CAM_ERR_SUCCESS) {
-//    printError(err);
-//  }
-  Serial.println("Set Auto white balance parameter");
-  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-  Serial.println("Set still picture format");
-  err = theCamera.setStillPictureImageFormat(
-   CAM_IMGSIZE_QVGA_H,
-   CAM_IMGSIZE_QVGA_V,
-   CAM_IMAGE_PIX_FMT_JPG);
-  if (err != CAM_ERR_SUCCESS) {
-    printError(err);
-  }
-
-  // GPSの初期化
-  Gnss.setDebugMode(PrintInfo);
-  int result;
-  result = Gnss.begin();
-  if (result != 0) {
-    Serial.println("Gnss begin error!!");
-  } else {
-    Gnss.select(GPS);
-    Gnss.select(QZ_L1CA);
-    Gnss.select(QZ_L1S);
-    result = Gnss.start(COLD_START);
-    if (result != 0) {
-      Serial.println("Gnss start error!!");
-    } else {
-      Serial.println("Gnss setup OK");
-    }
-  }
-  
-  digitalWrite(LED1, HIGH); // turn on LED
 }
 
 void parse_httpresponse(char *message) {
@@ -235,8 +165,29 @@ void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.println("");
 }
 
-void wait(SpNavData *pNavData, int sec) {
+bool wait(SpNavData *pNavData, int sec, bool br) {
+  byte rc;
+  float acc[3];
   for (int i = 0; i < sec; i++) {
+    rc = kx224.get_val(acc);
+    if (rc == 0) {
+      Serial.write("KX224 (X) = ");
+      Serial.print(acc[0]);
+      Serial.print(" [g]  (Y) = ");
+      Serial.print(acc[1]);
+      Serial.print(" [g]  (Z) = ");
+      Serial.print(acc[2]);
+      Serial.println(" [g]");
+      if ((acc[0] - g_X > THRESHOLD) || (acc[1] - g_Y > THRESHOLD) || (acc[2] - g_Z > THRESHOLD)) {
+        if (br) {
+          return true;
+        }
+      }
+      g_X = acc[0];
+      g_Y = acc[1];
+      g_Z = acc[2];
+    }
+    
     digitalWrite(LED3, HIGH); // turn on LED
     delay(100);
     digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
@@ -249,6 +200,92 @@ void wait(SpNavData *pNavData, int sec) {
       }
     }
   }
+  return false;
+}
+
+void setup() {
+  byte rc;
+  SpNavData NavData;
+  pinMode(LED0, OUTPUT);    // ネットワーク
+  pinMode(LED1, OUTPUT);    // 初期化終了
+  pinMode(LED2, OUTPUT);    // GPS FIX
+  pinMode(LED3, OUTPUT);    // 点滅、送信中点灯
+  digitalWrite(LED0, LOW);   // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED1, LOW);   // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
+  Serial.begin(BAUDRATE);    // talk to PC
+  while (!Serial) {
+    ;
+  }
+
+  // ネットワーク関連の初期化
+  Init_GS2200_SPI();
+  gsparams.mode = ATCMD_MODE_STATION;
+  gsparams.psave = ATCMD_PSAVE_DEFAULT;
+  if ( gs2200.begin( gsparams ) ){
+    ConsoleLog( "GS2200 Initilization Fails" );
+    while(1);
+  }
+  // AP接続
+  if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
+    ConsoleLog( "Association Fails" );
+    while(1);
+  }
+  digitalWrite(LED0, HIGH); // turn on LED
+
+  // カメラの初期化
+  CamErr err;
+  Serial.println("Prepare camera");
+  err = theCamera.begin();
+  if (err != CAM_ERR_SUCCESS) {
+    printError(err);
+  }
+//  Serial.println("Start streaming");
+//  err = theCamera.startStreaming(true, CamCB);
+//  if (err != CAM_ERR_SUCCESS) {
+//    printError(err);
+//  }
+  Serial.println("Set Auto white balance parameter");
+  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
+  if (err != CAM_ERR_SUCCESS) {
+    printError(err);
+  }
+  Serial.println("Set still picture format");
+  err = theCamera.setStillPictureImageFormat(
+   CAM_IMGSIZE_QVGA_H,
+   CAM_IMGSIZE_QVGA_V,
+   CAM_IMAGE_PIX_FMT_JPG);
+  if (err != CAM_ERR_SUCCESS) {
+    printError(err);
+  }
+
+  // GPSの初期化
+  Gnss.setDebugMode(PrintInfo);
+  int result;
+  result = Gnss.begin();
+  if (result != 0) {
+    Serial.println("Gnss begin error!!");
+  } else {
+    Gnss.select(GPS);
+    Gnss.select(QZ_L1CA);
+    Gnss.select(QZ_L1S);
+    result = Gnss.start(COLD_START);
+    if (result != 0) {
+      Serial.println("Gnss start error!!");
+    } else {
+      Serial.println("Gnss setup OK");
+    }
+  }
+
+  Wire.begin();
+  rc = kx224.init();
+  if (rc != 0) {
+    Serial.println("KX224 initialization failed");
+    Serial.flush();
+  }
+  wait(&NavData, 60, true);
+  digitalWrite(LED1, HIGH); // turn on LED
 }
 
 void loop() {
@@ -256,25 +293,26 @@ void loop() {
   float lat = 0.0;
   float lng = 0.0;
   // 位置情報取得
-  wait(&NavData, 5);
-  if (NavData.posFixMode != FixInvalid && NavData.posDataExist != 0) {
-    lat = NavData.latitude;
-    lng = NavData.longitude;
+  if (wait(&NavData, 60, true)) {     // breakする
+    if (NavData.posFixMode != FixInvalid && NavData.posDataExist != 0) {
+      lat = NavData.latitude;
+      lng = NavData.longitude;
+    }
+    // 撮影
+    CamImage img = theCamera.takePicture();
+    if (img.isAvailable()) {
+      char* imgBuff = img.getImgBuff();
+      uint32_t imgSize = img.getImgSize();
+      uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
+      char* sendBuff = (char*)malloc(sendSize);
+      snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
+      memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
+      printDebug("  === ", sendBuff, sendSize);
+      post(sendBuff, sendSize);
+      free(sendBuff);
+    } else {
+      Serial.println("  === img.isAvailable() FALSE");      
+    }
+    wait(&NavData, 60, false);
   }
-  // 撮影
-  CamImage img = theCamera.takePicture();
-  if (img.isAvailable()) {
-    char* imgBuff = img.getImgBuff();
-    uint32_t imgSize = img.getImgSize();
-    uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
-    char* sendBuff = (char*)malloc(sendSize);
-    snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
-    memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
-    printDebug("  === ", sendBuff, sendSize);
-    post(sendBuff, sendSize);
-    free(sendBuff);
-  } else {
-    Serial.println("  === img.isAvailable() FALSE");      
-  }
-  wait(&NavData, 55);
 }
