@@ -26,6 +26,28 @@ float g_X = 0.0;
 float g_Y = 0.0;
 float g_Z = 0.0;
 
+void errorLED(int sw) {
+  while (1) {
+    if (sw & 0x1) {
+      digitalWrite(LED0, HIGH);
+    }
+    if (sw & 0x2) {
+      digitalWrite(LED1, HIGH);
+    }
+    if (sw & 0x4) {
+      digitalWrite(LED2, HIGH);
+    }
+    if (sw & 0x8) {
+      digitalWrite(LED3, HIGH);
+    }
+    delay(100);
+    digitalWrite(LED0, LOW);
+    digitalWrite(LED1, LOW);
+    digitalWrite(LED2, LOW);
+    digitalWrite(LED3, LOW);
+    delay(200);
+  }
+}
 
 void printError(enum CamErr err) {
   Serial.print("Error: ");
@@ -82,6 +104,7 @@ void parse_httpresponse(char *message) {
   }
 }
 
+// HTTP POSTする
 void post(char* sendData, uint32_t size) {
   ATCMD_RESP_E resp;
   int count;
@@ -89,7 +112,7 @@ void post(char* sendData, uint32_t size) {
   uint32_t start;
   char size_string[10];
   
-  digitalWrite(LED3, HIGH); // turn on LED
+  digitalWrite(LED3, HIGH);     // 送信中は、LED3を点灯
   ConsoleLog( "Start HTTP Client");
 
   // HTTPヘッダー
@@ -151,7 +174,7 @@ void post(char* sendData, uint32_t size) {
   } while( (ATCMD_RESP_OK != resp) && (ATCMD_RESP_INVALID_CID != resp) );
   ConsoleLog( "Socket Closed" );
 
-  digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED3, LOW);   // 送信終わったので、LED3を消灯
 }
 
 void printDebug(char* title, char* sendData, uint32_t size) {
@@ -165,7 +188,9 @@ void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.println("");
 }
 
+// 指定秒数待つ、GPSのデータもチェックする、動きがあると途中でリターンする（第三パラメータ）
 bool wait(SpNavData *pNavData, int sec, bool br) {
+  bool ret = false;
   byte rc;
   float acc[3];
   for (int i = 0; i < sec; i++) {
@@ -173,14 +198,24 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
     if (rc == 0) {
       Serial.write("KX224 (X) = ");
       Serial.print(acc[0]);
-      Serial.print(" [g]  (Y) = ");
+      Serial.print(":");
+      Serial.print(g_X);
+      Serial.print("  (Y) = ");
       Serial.print(acc[1]);
-      Serial.print(" [g]  (Z) = ");
+      Serial.print(":");
+      Serial.print(g_Y);
+      Serial.print("  (Z) = ");
       Serial.print(acc[2]);
-      Serial.println(" [g]");
+      Serial.print(":");
+      Serial.println(g_Z);
       if ((acc[0] - g_X > THRESHOLD) || (acc[1] - g_Y > THRESHOLD) || (acc[2] - g_Z > THRESHOLD)) {
         if (br) {
-          return true;
+          Serial.println("Moved break!");
+          ret = true;
+          delay(2000);          // 動いたら３秒後にシャッター（後ろのGnss.waitUpdateも加える）
+          break;
+         } else {
+          Serial.println("Moved not break");
         }
       }
       g_X = acc[0];
@@ -188,35 +223,42 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
       g_Z = acc[2];
     }
     
-    digitalWrite(LED3, HIGH); // turn on LED
+    digitalWrite(LED3, HIGH);       // 動いている事が確認できるようにLED3を点滅させる
     delay(100);
-    digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
+    digitalWrite(LED3, LOW);        // LED3を点滅
+    if (!br) {
+      delay(100);
+      digitalWrite(LED3, HIGH);     // 動いている事が確認できるようにLED3を点滅させる
+      delay(100);
+      digitalWrite(LED3, LOW);      // LED3を点滅      
+    }
     if (Gnss.waitUpdate(1000)) {
       Gnss.getNavData(pNavData);
       if (pNavData->posFixMode != FixInvalid && pNavData->posDataExist != 0) {
-        digitalWrite(LED2, HIGH); // turn on LED
+        digitalWrite(LED2, HIGH);   // GPS取れてたら、LED2を点灯
       } else {
-        digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
+        digitalWrite(LED2, LOW);    // GPS見つからないと、LED2を消灯
       }
     }
   }
-  return false;
+  return ret;
 }
 
 void setup() {
   byte rc;
+  float acc[3];
   SpNavData NavData;
   pinMode(LED0, OUTPUT);    // ネットワーク
   pinMode(LED1, OUTPUT);    // 初期化終了
   pinMode(LED2, OUTPUT);    // GPS FIX
-  pinMode(LED3, OUTPUT);    // 点滅、送信中点灯
-  digitalWrite(LED0, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED1, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED2, LOW);   // turn the LED off (LOW is the voltage level)
-  digitalWrite(LED3, LOW);   // turn the LED off (LOW is the voltage level)
-  Serial.begin(BAUDRATE);    // talk to PC
+  pinMode(LED3, OUTPUT);    // 動作中は点滅、送信中点灯
+  digitalWrite(LED0, LOW);  // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED1, LOW);  // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED2, LOW);  // turn the LED off (LOW is the voltage level)
+  digitalWrite(LED3, LOW);  // turn the LED off (LOW is the voltage level)
+  Serial.begin(BAUDRATE);   // talk to PC
   while (!Serial) {
-    ;
+    delay(100);
   }
 
   // ネットワーク関連の初期化
@@ -225,14 +267,21 @@ void setup() {
   gsparams.psave = ATCMD_PSAVE_DEFAULT;
   if ( gs2200.begin( gsparams ) ){
     ConsoleLog( "GS2200 Initilization Fails" );
-    while(1);
+    errorLED(0xf);
   }
   // AP接続
-  if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
-    ConsoleLog( "Association Fails" );
-    while(1);
+  for (;;) {
+    if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
+      ConsoleLog( "Association Fails" );
+      digitalWrite(LED0, HIGH);
+      delay(300);
+      digitalWrite(LED0, LOW);
+      delay(300);
+    } else {
+      break;
+    }
   }
-  digitalWrite(LED0, HIGH); // turn on LED
+  digitalWrite(LED0, HIGH);       // ネットに繋がったら、LED0をON
 
   // カメラの初期化
   CamErr err;
@@ -240,6 +289,7 @@ void setup() {
   err = theCamera.begin();
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
+    errorLED(0x8);
   }
 //  Serial.println("Start streaming");
 //  err = theCamera.startStreaming(true, CamCB);
@@ -247,9 +297,16 @@ void setup() {
 //    printError(err);
 //  }
   Serial.println("Set Auto white balance parameter");
-  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);
+  err = theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_AUTO);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
+    errorLED(0x8);
+  }
+  Serial.println("Set Auto ISO Sensitivity");
+  err = theCamera.setAutoISOSensitivity(true);
+  if (err != CAM_ERR_SUCCESS) {
+    printError(err);
+    errorLED(0x8);
   }
   Serial.println("Set still picture format");
   err = theCamera.setStillPictureImageFormat(
@@ -258,6 +315,7 @@ void setup() {
    CAM_IMAGE_PIX_FMT_JPG);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
+    errorLED(0x8);
   }
 
   // GPSの初期化
@@ -266,6 +324,7 @@ void setup() {
   result = Gnss.begin();
   if (result != 0) {
     Serial.println("Gnss begin error!!");
+    errorLED(0x4);
   } else {
     Gnss.select(GPS);
     Gnss.select(QZ_L1CA);
@@ -278,14 +337,25 @@ void setup() {
     }
   }
 
+  // 加速度センサー
   Wire.begin();
   rc = kx224.init();
   if (rc != 0) {
     Serial.println("KX224 initialization failed");
     Serial.flush();
+    errorLED(0x2);
   }
-  wait(&NavData, 60, true);
-  digitalWrite(LED1, HIGH); // turn on LED
+  rc = kx224.get_val(acc);
+  if (rc != 0) {
+    Serial.println("KX224 get value failed");
+    Serial.flush();
+    errorLED(0x2);
+  } else {
+    g_X = acc[0];
+    g_Y = acc[1];
+    g_Z = acc[2];
+  }
+  digitalWrite(LED1, HIGH);       // 初期化が全て終わったら、LED1をON
 }
 
 void loop() {
@@ -293,14 +363,17 @@ void loop() {
   float lat = 0.0;
   float lng = 0.0;
   // 位置情報取得
-  if (wait(&NavData, 60, true)) {     // breakする
+  if (wait(&NavData, 60, true)) {     // ６０秒待つ、動きがあったら、if文の中を実行
     if (NavData.posFixMode != FixInvalid && NavData.posDataExist != 0) {
       lat = NavData.latitude;
       lng = NavData.longitude;
     }
     // 撮影
+    Serial.println("  === theCamera.takePicture() befor");
     CamImage img = theCamera.takePicture();
+    Serial.println("  === theCamera.takePicture() after");
     if (img.isAvailable()) {
+      Serial.println("  === img.isAvailable() TRUE");
       char* imgBuff = img.getImgBuff();
       uint32_t imgSize = img.getImgSize();
       uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
@@ -308,11 +381,11 @@ void loop() {
       snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
       memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
       printDebug("  === ", sendBuff, sendSize);
-      post(sendBuff, sendSize);
+      post(sendBuff, sendSize);     // 送信
       free(sendBuff);
+      wait(&NavData, 60, false);    // 撮影したら必ず６０秒まつ
     } else {
-      Serial.println("  === img.isAvailable() FALSE");      
+      Serial.println("  === img.isAvailable() FALSE");
     }
-    wait(&NavData, 60, false);
   }
 }

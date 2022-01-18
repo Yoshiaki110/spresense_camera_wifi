@@ -1,3 +1,5 @@
+// このプログラムは未完成
+// 
 var http = require('http');
 //var fs = require('fs');
 var querystring = require('querystring');
