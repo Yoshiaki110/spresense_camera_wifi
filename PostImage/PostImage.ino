@@ -1,18 +1,17 @@
 #include <GS2200Hal.h>
 #include <GS2200AtCmd.h>
 #include <TelitWiFi.h>
-#include "config.h"
-//#include <stdio.h>
 #include <Camera.h>
 #include <GNSS.h>
 #include <Wire.h>
 #include "KX224.h"
+#include "config.h"
 
-#define POSITION_BUFFER_SIZE  128       /**< %Buffer size */
+#define POSITION_BUFFER_SIZE  128
 #define BAUDRATE                (115200)
 #define THRESHOLD   0.15
 
-static SpGnss Gnss;                   /**< SpGnss object */
+static SpGnss Gnss;
 extern uint8_t  *RespBuffer[];
 extern int   RespBuffer_Index;
 extern uint8_t ESCBuffer[];
@@ -228,7 +227,7 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
     digitalWrite(LED3, LOW);        // LED3を点滅
     if (!br) {
       delay(100);
-      digitalWrite(LED3, HIGH);     // 動いている事が確認できるようにLED3を点滅させる
+      digitalWrite(LED3, HIGH);     // 撮影後は2度点滅
       delay(100);
       digitalWrite(LED3, LOW);      // LED3を点滅      
     }
@@ -265,14 +264,14 @@ void setup() {
   Init_GS2200_SPI();
   gsparams.mode = ATCMD_MODE_STATION;
   gsparams.psave = ATCMD_PSAVE_DEFAULT;
-  if ( gs2200.begin( gsparams ) ){
-    ConsoleLog( "GS2200 Initilization Fails" );
+  if (gs2200.begin(gsparams)){
+    ConsoleLog("GS2200 Initilization Fails");
     errorLED(0xf);
   }
   // AP接続
   for (;;) {
-    if ( gs2200.connect( AP_SSID, PASSPHRASE ) ){
-      ConsoleLog( "Association Fails" );
+    if (gs2200.connect(AP_SSID, PASSPHRASE)){
+      ConsoleLog("Association Fails");
       digitalWrite(LED0, HIGH);
       delay(300);
       digitalWrite(LED0, LOW);
@@ -345,6 +344,7 @@ void setup() {
     Serial.flush();
     errorLED(0x2);
   }
+  delay(300);
   rc = kx224.get_val(acc);
   if (rc != 0) {
     Serial.println("KX224 get value failed");
