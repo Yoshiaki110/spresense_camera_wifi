@@ -10,6 +10,7 @@
 #define POSITION_BUFFER_SIZE  128
 #define BAUDRATE                (115200)
 #define THRESHOLD   0.15
+#define STRING_BUFFER_SIZE  128
 
 static SpGnss Gnss;
 extern uint8_t  *RespBuffer[];
@@ -187,6 +188,45 @@ void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.println("");
 }
 
+static void print_pos(SpNavData *pNavData)
+{
+  char StringBuffer[STRING_BUFFER_SIZE];
+
+  /* print time */
+  snprintf(StringBuffer, STRING_BUFFER_SIZE, "%04d/%02d/%02d ", pNavData->time.year, pNavData->time.month, pNavData->time.day);
+  Serial.print(StringBuffer);
+
+  snprintf(StringBuffer, STRING_BUFFER_SIZE, "%02d:%02d:%02d.%06d, ", pNavData->time.hour, pNavData->time.minute, pNavData->time.sec, pNavData->time.usec);
+  Serial.print(StringBuffer);
+
+  /* print satellites count */
+  snprintf(StringBuffer, STRING_BUFFER_SIZE, "numSat:%2d, ", pNavData->numSatellites);
+  Serial.print(StringBuffer);
+
+  /* print position data */
+  if (pNavData->posFixMode == FixInvalid)
+  {
+    Serial.print("No-Fix, ");
+  }
+  else
+  {
+    Serial.print("Fix, ");
+  }
+  if (pNavData->posDataExist == 0)
+  {
+    Serial.print("No Position");
+  }
+  else
+  {
+    Serial.print("Lat=");
+    Serial.print(pNavData->latitude, 6);
+    Serial.print(", Lon=");
+    Serial.print(pNavData->longitude, 6);
+  }
+
+  Serial.println("");
+}
+
 // 指定秒数待つ、GPSのデータもチェックする、動きがあると途中でリターンする（第三パラメータ）
 bool wait(SpNavData *pNavData, int sec, bool br) {
   bool ret = false;
@@ -195,7 +235,7 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
   for (int i = 0; i < sec; i++) {
     rc = kx224.get_val(acc);
     if (rc == 0) {
-      Serial.write("KX224 (X) = ");
+/*      Serial.write("KX224 (X) = ");
       Serial.print(acc[0]);
       Serial.print(":");
       Serial.print(g_X);
@@ -206,7 +246,7 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
       Serial.print("  (Z) = ");
       Serial.print(acc[2]);
       Serial.print(":");
-      Serial.println(g_Z);
+      Serial.println(g_Z);*/
       if ((acc[0] - g_X > THRESHOLD) || (acc[1] - g_Y > THRESHOLD) || (acc[2] - g_Z > THRESHOLD)) {
         if (br) {
           Serial.println("Moved break!");
@@ -233,6 +273,7 @@ bool wait(SpNavData *pNavData, int sec, bool br) {
     }
     if (Gnss.waitUpdate(1000)) {
       Gnss.getNavData(pNavData);
+      print_pos(pNavData);
       if (pNavData->posFixMode != FixInvalid && pNavData->posDataExist != 0) {
         digitalWrite(LED2, HIGH);   // GPS取れてたら、LED2を点灯
       } else {
@@ -285,7 +326,7 @@ void setup() {
   // カメラの初期化
   CamErr err;
   Serial.println("Prepare camera");
-  err = theCamera.begin();
+  err = theCamera.begin(0);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
     errorLED(0x8);
@@ -309,8 +350,14 @@ void setup() {
   }
   Serial.println("Set still picture format");
   err = theCamera.setStillPictureImageFormat(
-   CAM_IMGSIZE_QVGA_H,
-   CAM_IMGSIZE_QVGA_V,
+//   CAM_IMGSIZE_QVGA_H,
+//   CAM_IMGSIZE_QVGA_V,
+   CAM_IMGSIZE_VGA_H,
+   CAM_IMGSIZE_VGA_V,
+//   CAM_IMGSIZE_HD_H,    // img.getImgBuff()でハングアップ
+//   CAM_IMGSIZE_HD_V,    // img.getImgBuff()でハングアップ
+//   CAM_IMGSIZE_QUADVGA_H,    // img.getImgBuff()でハングアップ
+//   CAM_IMGSIZE_QUADVGA_V,    // img.getImgBuff()でハングアップ
    CAM_IMAGE_PIX_FMT_JPG);
   if (err != CAM_ERR_SUCCESS) {
     printError(err);
@@ -326,13 +373,13 @@ void setup() {
     errorLED(0x4);
   } else {
     Gnss.select(GPS);
-    Gnss.select(QZ_L1CA);
-    Gnss.select(QZ_L1S);
+    //Gnss.select(QZ_L1CA);
+    //Gnss.select(QZ_L1S);
     result = Gnss.start(COLD_START);
     if (result != 0) {
       Serial.println("Gnss start error!!");
     } else {
-      Serial.println("Gnss setup OK");
+      Serial.println("Gnss setup OK");   
     }
   }
 
@@ -373,16 +420,45 @@ void loop() {
     CamImage img = theCamera.takePicture();
     Serial.println("  === theCamera.takePicture() after");
     if (img.isAvailable()) {
+      Gnss.saveEphemeris();
+      if (Gnss.stop() != 0) {
+        Serial.println("Gnss stop error!!");
+      } else if (Gnss.end() != 0) {
+        Serial.println("Gnss end error!!");
+      } else {
+        Serial.println("Gnss stop OK.");
+      }
+      //Gnss.stop();
+      //Gnss.end();
       Serial.println("  === img.isAvailable() TRUE");
       char* imgBuff = img.getImgBuff();
+      Serial.println("  === img.getImgBuff()");
       uint32_t imgSize = img.getImgSize();
       uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
-      char* sendBuff = (char*)malloc(sendSize);
-      snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
-      memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
-      printDebug("  === ", sendBuff, sendSize);
-      post(sendBuff, sendSize);     // 送信
-      free(sendBuff);
+      Serial.print("  ALLOC SIZE :");
+      Serial.println(sendSize);
+//      char* sendBuff = (char*)malloc(sendSize);
+//      snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
+//      memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
+//      printDebug("  === ", sendBuff, sendSize);
+//      post(sendBuff, sendSize);     // 送信
+//      free(sendBuff);
+      //Gnss.start(HOT_START);
+      //Gnss.begin();
+      delay(1000);
+      if (Gnss.begin() != 0) {
+        Serial.println("Gnss begin error!!");
+      }
+      delay(1000);
+      Gnss.select(GPS);
+      delay(1000);
+      if (Gnss.start(HOT_START) != 0) {
+        Serial.println("Gnss start error!!");
+      } else {
+        Serial.println("Gnss restart OK.");
+      }
+
+      
       wait(&NavData, 60, false);    // 撮影したら必ず６０秒まつ
     } else {
       Serial.println("  === img.isAvailable() FALSE");
