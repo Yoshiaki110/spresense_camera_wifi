@@ -1,19 +1,16 @@
+#include <Watchdog.h>
 #include <GS2200Hal.h>
 #include <GS2200AtCmd.h>
 #include <TelitWiFi.h>
-#include <Watchdog.h>
 #include <Camera.h>
-#include <GNSS.h>
-#include <Wire.h>
-#include "KX224.h"
+//#include <Wire.h>
 #include "config.h"
 
 #define POSITION_BUFFER_SIZE  128
 #define BAUDRATE                (115200)
-#define THRESHOLD   0.15
+//#define THRESHOLD   0.15
 #define STRING_BUFFER_SIZE  128
 
-static SpGnss Gnss;
 extern uint8_t  *RespBuffer[];
 extern int   RespBuffer_Index;
 extern uint8_t ESCBuffer[];
@@ -22,7 +19,6 @@ char server_cid = 0;
 char httpsrvr_ip[16];
 TelitWiFi gs2200;
 TWIFI_Params gsparams;
-KX224 kx224(KX224_DEVICE_ADDRESS_1E);
 
 void dispLED(int sw) {
   if (sw & 0x1) {
@@ -175,9 +171,7 @@ void post(char* sendData, uint32_t size) {
     if( msDelta(start)>20000 ) // Timeout
       break;
   }
-  Watchdog.kick();
   delay( 1000 );
-  Watchdog.kick();
   do {
     resp = AtCmd_HTTPCLOSE( server_cid );
   } while( (ATCMD_RESP_OK != resp) && (ATCMD_RESP_INVALID_CID != resp) );
@@ -197,84 +191,37 @@ void printDebug(char* title, char* sendData, uint32_t size) {
   Serial.println("");
 }
 
-static void print_pos(SpNavData *pNavData) {
-  char StringBuffer[STRING_BUFFER_SIZE];
-
-  /* print time */
-  snprintf(StringBuffer, STRING_BUFFER_SIZE, "%04d/%02d/%02d ", pNavData->time.year, pNavData->time.month, pNavData->time.day);
-  Serial.print(StringBuffer);
-
-  snprintf(StringBuffer, STRING_BUFFER_SIZE, "%02d:%02d:%02d.%06d, ", pNavData->time.hour, pNavData->time.minute, pNavData->time.sec, pNavData->time.usec);
-  Serial.print(StringBuffer);
-
-  /* print satellites count */
-  snprintf(StringBuffer, STRING_BUFFER_SIZE, "numSat:%2d, ", pNavData->numSatellites);
-  Serial.print(StringBuffer);
-
-  /* print position data */
-  if (pNavData->posFixMode == FixInvalid) {
-    Serial.print("No-Fix, ");
-  } else {
-    Serial.print("Fix, ");
+bool tcpConnect() {
+  ATCMD_RESP_E resp;
+  ATCMD_NetworkStatus networkStatus;
+  
+  resp = ATCMD_RESP_UNMATCH;
+  // Start a TCP client
+  ConsoleLog( "Start TCP Client");
+  resp = AtCmd_NCTCP( (char *)TCPSRVR_IP, (char *)TCPSRVR_PORT, &server_cid);
+  if (resp != ATCMD_RESP_OK) {
+    ConsoleLog( "No Connect!" );    // サーバと接続できなかっt
+    delay(2000);
+    return false;
   }
-  if (pNavData->posDataExist == 0) {
-    Serial.print("No Position");
-  } else {
-    Serial.print("Lat=");
-    Serial.print(pNavData->latitude, 6);
-    Serial.print(", Lon=");
-    Serial.print(pNavData->longitude, 6);
+  if (server_cid == ATCMD_INVALID_CID) {
+    ConsoleLog( "No CID!" );
+    delay(2000);
+    return false;
   }
-  Serial.println("");
-}
+  do {
+    resp = AtCmd_NSTAT(&networkStatus);
+  } while (ATCMD_RESP_OK != resp);
+  ConsoleLog( "**** 64");
+  ConsoleLog( "Connected" );
+  ConsolePrintf("IP: %d.%d.%d.%d\r\n", 
+    networkStatus.addr.ipv4[0], networkStatus.addr.ipv4[1], networkStatus.addr.ipv4[2], networkStatus.addr.ipv4[3]);
 
-// GPSのが取れるまで待つ
-bool wait1(SpNavData *pNavData) {
-  for (int i = 0; i < 20; i++) {
-    dispLED(0xf);
-    delay(500);
-    dispLED(0x0);
-    delay(500);
-    Watchdog.kick();
-  }
-  return;
-}
-
-
-// GPSのが取れるまで待つ
-bool wait(SpNavData *pNavData) {
-  while (1) {
-    if (Gnss.waitUpdate(1000)) {
-      Gnss.getNavData(pNavData);
-      print_pos(pNavData);
-      dispLED(pNavData->numSatellites);
-      if (pNavData->posFixMode != FixInvalid && pNavData->posDataExist != 0) {
-        break;
-      }
-    }
-    Watchdog.kick();
-  }
-  if (Gnss.stop() != 0) {
-    Serial.println("Gnss stop error!!");
-  } else if (Gnss.end() != 0) {
-    Serial.println("Gnss end error!!");
-  } else {
-    Serial.println("Gnss stop OK.");
-  }
-  for (int i = 0; i < 25; i++) {
-    dispLED(0xf);
-    delay(100);
-    dispLED(0x0);
-    delay(100);
-    Watchdog.kick();
-  }
-  return;
+  WiFi_InitESCBuffer();
+  return true;
 }
 
 void setup() {
-  byte rc;
-  float acc[3];
-  SpNavData NavData;
   pinMode(LED0, OUTPUT);    // ネットワーク
   pinMode(LED1, OUTPUT);    // 初期化終了
   pinMode(LED2, OUTPUT);    // GPS FIX
@@ -350,78 +297,65 @@ void setup() {
     printError(err);
     errorLED(0x8);
   }
-
-  // GPSの初期化
-  Gnss.setDebugMode(PrintInfo);
-  int result;
-  result = Gnss.begin();
-  if (result != 0) {
-    Serial.println("Gnss begin error!!");
-    errorLED(0x4);
-  } else {
-    Gnss.select(GPS);
-    Gnss.select(QZ_L1CA);
-    Gnss.select(QZ_L1S);
-    result = Gnss.start(COLD_START);
-    if (result != 0) {
-      Serial.println("Gnss start error!!");
-    } else {
-      Serial.println("Gnss setup OK");   
-    }
-  }
-
-  // 加速度センサー
-  Wire.begin();
-  rc = kx224.init();
-  if (rc != 0) {
-    Serial.println("KX224 initialization failed");
-    Serial.flush();
-    errorLED(0x2);
-  }
-  delay(300);
-  rc = kx224.get_val(acc);
-  if (rc != 0) {
-    Serial.println("KX224 get value failed");
-    Serial.flush();
-    errorLED(0x2);
-  }
-
+  tcpConnect();
+  
   Watchdog.begin();
-  Watchdog.start(5000);
-    
+  Watchdog.start(10000);
+
   digitalWrite(LED1, HIGH);       // 初期化が全て終わったら、LED1をON
 }
 
 void loop() {
-  SpNavData NavData;
-  float lat = 0.0;
-  float lng = 0.0;
-  // 位置情報取得
-  wait(&NavData);    // GPS取れるまで待つ
-  lat = NavData.latitude;
-  lng = NavData.longitude;
+  ATCMD_RESP_E resp;
+  bool shoot = false;
+  
+  Watchdog.kick();
+  
+  while( Get_GPIO37Status() ){    // 受信データがあるか
+    ConsoleLog( "**** 731");
+    resp = AtCmd_RecvResponse();
+    ConsoleLog( "**** 732");
+    if ( ATCMD_RESP_BULK_DATA_RX == resp ){
+      ConsoleLog( "**** 7321");
+      if( Check_CID( server_cid ) ){
+        ConsoleLog( "**** 73211");
+        ConsolePrintf( "Receive %d byte:%s \r\n", ESCBufferCnt-1, ESCBuffer+1 );
+        shoot = true;
+      }
+      ConsoleLog( "**** 7322");
+      WiFi_InitESCBuffer();
+    } else if (ATCMD_RESP_ESC_FAIL == resp) {
+      ConsoleLog("TCP Disconnect");
+      delay(1000);
+      ConsoleLog("try re connect");
+      tcpConnect();
+      break;
+    }
+  }
 
-  // 撮影
-  Serial.println("  === theCamera.takePicture() befor");
-  CamImage img = theCamera.takePicture();
-  Serial.println("  === theCamera.takePicture() after");
-  if (img.isAvailable()) {
-    Serial.println("  === img.isAvailable() TRUE");
-    char* imgBuff = img.getImgBuff();
-    Serial.println("  === img.getImgBuff()");
-    uint32_t imgSize = img.getImgSize();
-    uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
-    Serial.print("  ALLOC SIZE :");
-    Serial.println(sendSize);
-    char* sendBuff = (char*)malloc(sendSize);
-    snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", lat, lng);
-    memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
-    printDebug("  === ", sendBuff, sendSize);
-    post(sendBuff, sendSize);     // 送信
-    free(sendBuff);
+  if (shoot) {
+    // 撮影
+    Serial.println("  === theCamera.takePicture() befor");
+    CamImage img = theCamera.takePicture();
+    Serial.println("  === theCamera.takePicture() after");
+    if (img.isAvailable()) {
+      Serial.println("  === img.isAvailable() TRUE");
+      char* imgBuff = img.getImgBuff();
+      Serial.println("  === img.getImgBuff()");
+      uint32_t imgSize = img.getImgSize();
+      uint32_t sendSize = imgSize + POSITION_BUFFER_SIZE;
+      Serial.print("  ALLOC SIZE :");
+      Serial.println(sendSize);
+      char* sendBuff = (char*)malloc(sendSize);
+      snprintf(sendBuff, POSITION_BUFFER_SIZE, "%10.6f %10.6f", 0.0, 0.0);
+      memcpy(sendBuff + POSITION_BUFFER_SIZE, imgBuff, imgSize);
+      printDebug("  === ", sendBuff, sendSize);
+      post(sendBuff, sendSize);     // 送信
+      free(sendBuff);
 
-    delay(100000);
-  } else {
-    Serial.println("  === img.isAvailable() FALSE");
+      delay(100000);
+    } else {
+      Serial.println("  === img.isAvailable() FALSE");
+    }
   }
 }

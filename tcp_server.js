@@ -13,6 +13,7 @@ var len=0;
 var fs = require('fs');
 var fname = "TCP_TEST"
 var wdata;
+var _conn;
 
 
 // File Write Function
@@ -26,6 +27,7 @@ function writeFile(path, data) {
 
 
 server = net.createServer(function(conn){
+    _conn = conn;
     console.log('server-> tcp server created');
 
     conn.on('data', function(data){
@@ -40,6 +42,7 @@ server = net.createServer(function(conn){
 	    writeFile(fname, wdata);
 	    len = 0;
 	    startTime = endTime;
+            conn.write('aaa');
 	}
     });
 	
@@ -62,4 +65,52 @@ else{
 }
 
 console.log('listening on port %d', port);
+
+
+const readline = require('readline');
+
+/**
+ * メイン処理
+ */
+const main = async () => {
+  for (;;) {
+    console.log('エリクサーちょうだい！');
+    if (await confirm('> あげますか？')) {
+      console.log('ありがとう！^_^');
+      _conn.write('aaa');
+    } else {
+      console.log('死ね！');
+    }
+    console.log('');  // 改行
+  }
+};
+
+/**
+ * ユーザーにYes/Noで答えられる質問をする
+ */
+const confirm = async (msg) => {
+  const answer = await question(`${msg}(y/n): `);
+  return answer.trim().toLowerCase() === 'y';
+};
+
+/**
+ * 標準入力を取得する
+ */
+const question = (question) => {
+  const readlineInterface = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  return new Promise((resolve) => {
+    readlineInterface.question(question, (answer) => {
+      resolve(answer);
+      readlineInterface.close();
+    });
+  });
+};
+
+// 起動
+(async () => {
+  await main();
+})();
 
