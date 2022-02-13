@@ -19,6 +19,54 @@ char server_cid = 0;
 char httpsrvr_ip[16];
 TelitWiFi gs2200;
 TWIFI_Params gsparams;
+uint32_t timer = 0;
+
+static void led_onoff( int num, bool stat ){
+  switch( num ){
+  case 0:
+    digitalWrite( LED0, stat );
+    break;
+  case 1:
+    digitalWrite( LED1, stat );
+    break;
+  case 2:
+    digitalWrite( LED2, stat );
+    break;
+  case 3:
+    digitalWrite( LED3, stat );
+    break;
+  }
+}
+
+/*---------------------------------------------------------------------------*
+ * led_effect
+ *---------------------------------------------------------------------------*
+ * Description: See this effect....
+ *---------------------------------------------------------------------------*/
+static void led_effect(void) {
+  static int cur=0, next;
+  int i;
+  static bool direction=true; // which way to go
+  for ( i=-1; i<5; i++ ){
+    if ( i==cur ){
+      led_onoff( i, true );
+      if ( direction ) {
+        led_onoff( i-1, false );
+      } else {
+        led_onoff( i+1, false );
+      }
+    }
+  }
+  if ( direction ){ // 0 -> 1 -> 2 -> 3
+    if ( ++cur > 4 ) {
+      direction = false;
+    }
+  } else {
+    if ( --cur < -1 ) {
+      direction = true;
+    }
+  }   
+}
 
 void dispLED(int sw) {
   if (sw & 0x1) {
@@ -141,7 +189,8 @@ void post(char* sendData, uint32_t size) {
   } while (ATCMD_RESP_OK != resp);
   // 送信
   do {
-    resp = AtCmd_HTTPSEND( server_cid, HTTP_METHOD_POST, 10, "/postData", sendData, size );
+    resp = AtCmd_HTTPSEND( server_cid, HTTP_METHOD_POST, 10, "/postFace", sendData, size );
+    //resp = AtCmd_HTTPSEND( server_cid, HTTP_METHOD_POST, 10, "/postData", sendData, size );
   } while (ATCMD_RESP_OK != resp);
   
   // レスポンス
@@ -303,6 +352,7 @@ void setup() {
   Watchdog.start(10000);
 
   digitalWrite(LED1, HIGH);       // 初期化が全て終わったら、LED1をON
+  timer = millis();
 }
 
 void loop() {
@@ -310,7 +360,10 @@ void loop() {
   bool shoot = false;
   
   Watchdog.kick();
-  
+  if ( msDelta( timer ) > 100 ){
+    timer = millis();
+    led_effect();
+  }
   while( Get_GPIO37Status() ){    // 受信データがあるか
     ConsoleLog( "**** 731");
     resp = AtCmd_RecvResponse();
